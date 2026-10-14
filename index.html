@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f5fbf">
+<title>Stemmen</title>
+<style>
+  :root {
+    --bg: #f4f6fa; --panel: #fff; --ink: #18212f; --muted: #667085; --line: #d9dee8;
+    --brand: #1f5fbf; --ok: #1e9e5a; --bad: #d64545;
+    --c0: #2f6fdb; --c1: #f08c2b; --c2: #22a06b; --c3: #8a5cf6; --c4: #e5484d; --c5: #0fa3b1;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif; font-size: 18px;
+  }
+  header {
+    background: var(--brand); color: #fff; padding: 12px 16px;
+    display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 20px;
+  }
+  header .code { margin-left: auto; font-size: 15px; font-weight: 600; opacity: .9; }
+  header .code button { background: rgba(255,255,255,.18); color: #fff; border: 0; border-radius: 8px; padding: 5px 9px; font: inherit; font-size: 13px; margin-left: 6px; cursor: pointer; }
+  main { max-width: 560px; margin: 0 auto; padding: 18px 16px 40px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 20px; }
+  .center { text-align: center; }
+  .muted { color: var(--muted); }
+  h1 { font-size: 24px; margin: 0 0 14px; line-height: 1.25; }
+  .status { display: flex; align-items: center; gap: 8px; justify-content: center; font-size: 14px; color: var(--muted); margin-top: 14px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #d98a00; }
+  .status.ok .dot { background: var(--ok); }
+  .status.err .dot { background: var(--bad); }
+  input.code-in {
+    width: 100%; font-size: 34px; font-weight: 800; letter-spacing: 6px; text-align: center; text-transform: uppercase;
+    padding: 12px; border: 2px solid var(--line); border-radius: 12px; margin: 10px 0 14px;
+  }
+  input.code-in:focus, input.word-in:focus { outline: none; border-color: var(--brand); }
+  .btn {
+    width: 100%; border: 0; border-radius: 12px; padding: 15px; font: inherit; font-weight: 700; font-size: 19px;
+    background: var(--brand); color: #fff; cursor: pointer;
+  }
+  .btn:disabled { opacity: .45; }
+  .opts { display: grid; gap: 12px; }
+  .opts.grid2 { grid-template-columns: 1fr 1fr; }
+  .opts.row5 { grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .opt {
+    display: flex; align-items: center; gap: 12px; text-align: left;
+    border: 3px solid transparent; border-radius: 14px; padding: 16px; min-height: 72px;
+    font: inherit; font-size: 19px; color: #fff; cursor: pointer; transition: transform .08s, opacity .2s;
+  }
+  .opt:active { transform: scale(.97); }
+  .opt .k { font-size: 30px; font-weight: 800; min-width: 30px; text-align: center; }
+  .opt .t { font-weight: 600; }
+  .opts.big .opt { flex-direction: column; justify-content: center; text-align: center; gap: 4px; }
+  .opts.row5 .opt { padding: 14px 4px; justify-content: center; }
+  .opt.chosen { border-color: var(--ink); box-shadow: 0 0 0 3px #fff inset; }
+  .opts.has-choice .opt:not(.chosen) { opacity: .45; }
+  .opts.locked .opt { cursor: default; }
+  .opt.correct { opacity: 1 !important; }
+  .opt.correct::after { content: "✓"; margin-left: auto; font-size: 28px; font-weight: 800; }
+  .opts.big .opt.correct::after, .opts.row5 .opt.correct::after { margin-left: 0; }
+  .word-in { width: 100%; font: inherit; font-size: 22px; padding: 14px; border: 2px solid var(--line); border-radius: 12px; margin-bottom: 12px; }
+  .msg { margin-top: 16px; padding: 12px 14px; border-radius: 12px; background: #eef4ff; font-size: 16px; text-align: center; }
+  .msg.ok { background: #e3f6ec; color: #116a3c; }
+  .msg.bad { background: #fde8e8; color: #9b2c2c; }
+  .msg.closed { background: #f1f2f5; color: var(--muted); }
+  .wait-ico { font-size: 54px; margin: 6px 0 8px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <span>Stemmen</span>
+  <span class="code hidden" id="hdrCode"></span>
+</header>
+<main id="main"></main>
+
+<script src="lib/mqtt.min.js"></script>
+<script>
+(function () {
+  'use strict';
+  var DEFAULT_BROKER = 'wss://broker.hivemq.com:8884/mqtt';
+  var TOPIC_ROOT = 'clarisstem/v1/';
+  var COLORS = ['var(--c0)', 'var(--c1)', 'var(--c2)', 'var(--c3)', 'var(--c4)', 'var(--c5)'];
+  var CODE_RE = /^[A-Z0-9]{6}$/;
+
+  var params = new URLSearchParams(location.search);
+  var broker = params.get('b') || DEFAULT_BROKER;
+  if (!/^wss?:\/\//i.test(broker)) broker = DEFAULT_BROKER;
+  var code = (params.get('c') || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+  function store(k, v) { try { if (v === undefined) return localStorage.getItem('stemmen.' + k); localStorage.setItem('stemmen.' + k, v); } catch (e) { return null; } }
+  var voter = store('voter');
+  if (!voter) { voter = 'l' + Math.random().toString(36).slice(2, 12); store('voter', voter); }
+
+  var main = document.getElementById('main');
+  var client = null, q = null, gotState = false, connState = 'wait', heartbeat = null;
+  var myVotes = {};
+  try { myVotes = JSON.parse(sessionStorage.getItem('stemmen.mine') || '{}') || {}; } catch (e) {}
+  function saveVotes() { try { sessionStorage.setItem('stemmen.mine', JSON.stringify(myVotes)); } catch (e) {} }
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = text;
+    return e;
+  }
+
+  // ---------- Code invoeren ----------
+  function showCodeEntry(err) {
+    disconnect();
+    document.getElementById('hdrCode').classList.add('hidden');
+    main.innerHTML = '';
+    var card = el('div', 'card center');
+    card.appendChild(el('h1', null, 'Geef de klascode in'));
+    card.appendChild(el('div', 'muted', 'Je vindt de code op het bord, onder de QR-code.'));
+    var inp = el('input', 'code-in');
+    inp.maxLength = 6; inp.autocomplete = 'off'; inp.setAttribute('autocapitalize', 'characters');
+    inp.setAttribute('inputmode', 'text'); inp.placeholder = '······';
+    inp.value = store('lastCode') || '';
+    var btn = el('button', 'btn', 'Meedoen');
+    function go() {
+      var c = inp.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (!CODE_RE.test(c)) { msg.textContent = 'Een code heeft 6 tekens.'; msg.classList.remove('hidden'); return; }
+      code = c;
+      var u = new URL(location.href); u.searchParams.set('c', c);
+      history.replaceState(null, '', u.toString());
+      startSession();
+    }
+    btn.onclick = go;
+    inp.onkeydown = function (e) { if (e.key === 'Enter') go(); };
+    var msg = el('div', 'msg bad' + (err ? '' : ' hidden'), err || '');
+    card.appendChild(inp); card.appendChild(btn); card.appendChild(msg);
+    main.appendChild(card);
+    setTimeout(function () { inp.focus(); }, 50);
+  }
+
+  // ---------- Verbinding ----------
+  function base() { return TOPIC_ROOT + code; }
+  function disconnect() {
+    if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+    if (client) { try { client.end(true); } catch (e) {} client = null; }
+  }
+  function startSession() {
+    store('lastCode', code);
+    var hc = document.getElementById('hdrCode');
+    hc.textContent = 'Code ' + code + ' ';
+    var change = el('button', null, 'wijzig');
+    change.onclick = function () { showCodeEntry(); };
+    hc.appendChild(change);
+    hc.classList.remove('hidden');
+    q = null; gotState = false;
+    render();
+    disconnect();
+    var c = client = mqtt.connect(broker, {
+      clientId: 'll_' + Math.random().toString(36).slice(2, 10),
+      clean: true, keepalive: 30, reconnectPeriod: 2500, connectTimeout: 10000
+    });
+    c.on('connect', function () {
+      if (c !== client) return;
+      connState = 'ok';
+      c.subscribe(base() + '/vraag', { qos: 1 });
+      hello();
+      render();
+      setTimeout(function () { if (c === client && !gotState) { gotState = true; render(); } }, 4000);
+    });
+    c.on('reconnect', function () { if (c === client) { connState = 'wait'; render(); } });
+    c.on('offline', function () { if (c === client) { connState = 'err'; render(); } });
+    c.on('error', function () { if (c === client) { connState = 'err'; render(); } });
+    c.on('message', function (topic, payload) {
+      if (c !== client || payload.length > 8000) return;
+      var m = null;
+      if (payload.length) { try { m = JSON.parse(payload.toString()); } catch (e) { return; } }
+      gotState = true;
+      q = (m && m.qid && Array.isArray(m.options)) ? m : null;
+      render();
+    });
+    heartbeat = setInterval(hello, 30000);
+  }
+  function hello() {
+    if (client && client.connected) client.publish(base() + '/hallo', JSON.stringify({ voter: voter }), { qos: 0 });
+  }
+  function vote(value) {
+    if (!q || !q.open || !client || !client.connected) return;
+    var qid = q.qid;
+    myVotes[qid] = { value: value, sent: false };
+    saveVotes();
+    render();
+    client.publish(base() + '/stem', JSON.stringify({ qid: qid, voter: voter, value: value }), { qos: 1 }, function (err) {
+      if (!err && myVotes[qid]) { myVotes[qid].sent = true; saveVotes(); render(); }
+    });
+  }
+
+  // ---------- Weergave ----------
+  function statusLine() {
+    var s = el('div', 'status' + (connState === 'ok' ? ' ok' : connState === 'err' ? ' err' : ''));
+    s.appendChild(el('span', 'dot'));
+    s.appendChild(el('span', null, connState === 'ok' ? 'Verbonden' : connState === 'err' ? 'Geen verbinding – opnieuw proberen…' : 'Verbinden…'));
+    return s;
+  }
+
+  function render() {
+    main.innerHTML = '';
+    var card = el('div', 'card');
+    if (!q) {
+      card.className = 'card center';
+      card.appendChild(el('div', 'wait-ico', '⏳'));
+      card.appendChild(el('h1', null, 'Wacht op de volgende vraag'));
+      card.appendChild(el('div', 'muted', gotState ? 'Je leraar start zo meteen een stemming. Deze pagina past zich vanzelf aan.' : 'Even geduld…'));
+      card.appendChild(statusLine());
+      main.appendChild(card);
+      return;
+    }
+    var mine = myVotes[q.qid];
+    var title = q.text || (q.type === 'word' ? 'Typ je antwoord' : 'Kies je antwoord');
+    card.appendChild(el('h1', null, title));
+
+    if (q.type === 'word') {
+      var inp = el('input', 'word-in');
+      inp.maxLength = 40; inp.placeholder = 'Je antwoord'; inp.autocomplete = 'off';
+      if (mine) inp.value = mine.value;
+      inp.disabled = !q.open;
+      var btn = el('button', 'btn', mine ? 'Wijzig antwoord' : 'Verstuur');
+      btn.disabled = !q.open;
+      var send = function () { var v = inp.value.replace(/\s+/g, ' ').trim(); if (v) vote(v); };
+      btn.onclick = send;
+      inp.onkeydown = function (e) { if (e.key === 'Enter') send(); };
+      card.appendChild(inp); card.appendChild(btn);
+    } else {
+      var n = q.options.length;
+      var cls = 'opts';
+      if (q.type === 'scale') cls += ' row5 big';
+      else if (q.type === 'mc' && n >= 4 && !q.options.some(function (o) { return o.text; })) cls += ' grid2 big';
+      else if (q.type === 'thumb') cls += ' big';
+      if (mine) cls += ' has-choice';
+      if (!q.open) cls += ' locked';
+      var opts = el('div', cls);
+      q.options.forEach(function (o, i) {
+        var b = el('button', 'opt');
+        b.style.background = optionColor(q.type, i);
+        b.appendChild(el('span', 'k', String(o.key || '').slice(0, 12)));
+        if (o.text) b.appendChild(el('span', 't', String(o.text).slice(0, 80)));
+        if (mine && mine.value === i) b.classList.add('chosen');
+        if (q.correct !== null && q.correct !== undefined && q.correct === i) b.classList.add('correct');
+        b.onclick = function () { vote(i); };
+        opts.appendChild(b);
+      });
+      card.appendChild(opts);
+    }
+
+    var m;
+    if (q.correct !== null && q.correct !== undefined && q.type === 'mc') {
+      if (!mine) m = el('div', 'msg closed', 'Het juiste antwoord is ' + q.options[q.correct].key + '.');
+      else if (mine.value === q.correct) m = el('div', 'msg ok', 'Juist! Goed gedaan.');
+      else m = el('div', 'msg bad', 'Helaas, het juiste antwoord is ' + q.options[q.correct].key + '.');
+    } else if (!q.open) {
+      m = el('div', 'msg closed', mine ? 'De stemming is gesloten. Je stem telt mee.' : 'De stemming is gesloten.');
+    } else if (mine) {
+      m = el('div', 'msg ok', mine.sent ? 'Je stem is ontvangen. Je kunt nog wijzigen zolang de stemming open is.' : 'Versturen…');
+    }
+    if (m) card.appendChild(m);
+    card.appendChild(statusLine());
+    main.appendChild(card);
+  }
+
+  function optionColor(type, i) {
+    if (type === 'yn') return ['var(--c2)', 'var(--c4)', '#7b8496'][i];
+    if (type === 'thumb') return ['var(--c2)', 'var(--c1)', 'var(--c4)'][i];
+    if (type === 'scale') return ['#9dbbef', '#6f9be6', '#4f86e0', '#3f78d9', '#1f5fbf'][i];
+    return COLORS[i % COLORS.length];
+  }
+
+  if (CODE_RE.test(code)) startSession(); else showCodeEntry();
+})();
+</script>
+</body>
+</html>
